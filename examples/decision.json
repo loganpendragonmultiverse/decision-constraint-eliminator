@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "options": [
+    {"id": "a", "label": "Option A", "attributes": {"price": 40, "platform": "PC", "offline": true}},
+    {"id": "b", "label": "Option B", "attributes": {"price": 70, "platform": "Console", "offline": false}}
+  ],
+  "constraints": [
+    {"id": "budget", "label": "Costs no more than 50", "field": "price", "operator": "max", "value": 50},
+    {"id": "offline", "label": "Works offline", "field": "offline", "operator": "eq", "value": true}
+  ]
+}
