@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "missing_policy": "unknown",
   "options": [
     {"id": "a", "label": "Option A", "attributes": {"price": 40, "platform": "PC", "offline": true}},
     {"id": "b", "label": "Option B", "attributes": {"price": 70, "platform": "Console", "offline": false}}

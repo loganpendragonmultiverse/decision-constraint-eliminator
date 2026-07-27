@@ -12,6 +12,8 @@ def load_decision(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict) or data.get("version") != 1:
         raise ValueError("decision must be a version 1 object")
     options, constraints = data.get("options"), data.get("constraints")
+    if data.get("missing_policy", "fail") not in {"fail", "ignore", "unknown"}:
+        raise ValueError("missing_policy must be fail, ignore, or unknown")
     if not isinstance(options, list) or not options:
         raise TypeError("options must be a non-empty list")
     if not isinstance(constraints, list):
@@ -81,28 +83,62 @@ def _passes(attributes: dict[str, Any], constraint: dict[str, Any]) -> bool:
 
 
 def eliminate(data: dict[str, Any]) -> dict[str, Any]:
-    surviving, eliminated = [], []
+    policy = data.get("missing_policy", "fail")
+    if policy not in {"fail", "ignore", "unknown"}:
+        raise ValueError("missing_policy must be fail, ignore, or unknown")
+    surviving, eliminated, unknown, matrix = [], [], [], []
     for option in data["options"]:
-        failures = []
+        failures, unresolved, checks = [], [], []
         for constraint in data["constraints"]:
-            if not _passes(option["attributes"], constraint):
-                failures.append(
-                    {
-                        "constraint": constraint["id"],
-                        "label": constraint.get("label", constraint["id"]),
-                        "field": constraint["field"],
-                    }
-                )
+            missing = (
+                constraint["field"] not in option["attributes"]
+                and constraint["operator"] != "exists"
+            )
+            state = (
+                "ignored"
+                if missing and policy == "ignore"
+                else "unknown"
+                if missing and policy == "unknown"
+                else "pass"
+                if _passes(option["attributes"], constraint)
+                else "fail"
+            )
+            evidence = {
+                "constraint": constraint["id"],
+                "label": constraint.get("label", constraint["id"]),
+                "field": constraint["field"],
+                "state": state,
+            }
+            checks.append(evidence)
+            if state == "fail":
+                failures.append(evidence)
+            elif state == "unknown":
+                unresolved.append(evidence)
+        classification = "eliminated" if failures else "unknown" if unresolved else "surviving"
+        matrix.append(
+            {
+                "id": option["id"],
+                "label": option["label"],
+                "classification": classification,
+                "checks": checks,
+            }
+        )
         if failures:
             eliminated.append({"id": option["id"], "label": option["label"], "failures": failures})
+        elif unresolved:
+            unknown.append({"id": option["id"], "label": option["label"], "unknown": unresolved})
         else:
             surviving.append(option)
     return {
         "version": 1,
         "surviving_count": len(surviving),
         "eliminated_count": len(eliminated),
+        "unknown_count": len(unknown),
+        "missing_policy": policy,
         "surviving": surviving,
         "eliminated": eliminated,
+        "unknown": unknown,
+        "matrix": matrix,
     }
 
 
@@ -110,7 +146,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Decision Constraint Report",
         "",
-        f"**{report['surviving_count']} surviving · {report['eliminated_count']} eliminated**",
+        f"**{report['surviving_count']} surviving · {report['eliminated_count']} eliminated · {report['unknown_count']} unknown**",
         "",
         "## Surviving",
         "",
@@ -121,4 +157,15 @@ def render_markdown(report: dict[str, Any]) -> str:
         for item in report["eliminated"]:
             lines.append(f"- **{item['label']}** (`{item['id']}`)")
             lines.extend(f"  - {failure['label']}" for failure in item["failures"])
+    if report["unknown"]:
+        lines.extend(["", "## Unknown", ""])
+        for item in report["unknown"]:
+            lines.append(f"- **{item['label']}** (`{item['id']}`)")
+            lines.extend(f"  - {check['label']} (missing field)" for check in item["unknown"])
+    lines.extend(["", "## Complete Matrix", ""])
+    for item in report["matrix"]:
+        states = ", ".join(f"{check['constraint']}={check['state']}" for check in item["checks"])
+        lines.append(
+            f"- **{item['label']}**: {item['classification']} — {states or 'no constraints'}"
+        )
     return "\n".join(lines).rstrip() + "\n"

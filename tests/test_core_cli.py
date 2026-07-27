@@ -48,6 +48,7 @@ def test_elimination_and_markdown():
     report = eliminate(decision())
     assert report["surviving"][0]["id"] == "a"
     assert report["eliminated"][0]["id"] == "b"
+    assert report["matrix"][0]["checks"][0]["state"] == "pass"
     assert "Costs no more" in render_markdown(report)
 
 
@@ -166,3 +167,31 @@ def test_cli_safe_output(tmp_path):
     output = tmp_path / "report.md"
     assert main([str(path), "--output", str(output)]) == 0
     assert main([str(path), "--output", str(output)]) == 2
+
+
+@pytest.mark.parametrize(
+    ("policy", "classification", "state"),
+    [
+        ("fail", "eliminated", "fail"),
+        ("ignore", "surviving", "ignored"),
+        ("unknown", "unknown", "unknown"),
+    ],
+)
+def test_missing_field_policies_and_complete_matrix(policy, classification, state):
+    payload = {
+        "version": 1,
+        "missing_policy": policy,
+        "options": [{"id": "a", "label": "A", "attributes": {}}],
+        "constraints": [{"id": "price", "field": "price", "operator": "max", "value": 50}],
+    }
+    report = eliminate(payload)
+    assert report["matrix"][0]["classification"] == classification
+    assert report["matrix"][0]["checks"][0]["state"] == state
+    assert report["unknown_count"] == (1 if policy == "unknown" else 0)
+
+
+def test_invalid_missing_policy_is_rejected():
+    payload = decision()
+    payload["missing_policy"] = "guess"
+    with pytest.raises(ValueError, match="missing_policy"):
+        eliminate(payload)
