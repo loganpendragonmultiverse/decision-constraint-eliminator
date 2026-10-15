@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from .core import eliminate, load_decision, render_markdown
+from .core import counterfactual, eliminate, load_decision, render_markdown
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -15,9 +15,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("input", type=Path)
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--omit-constraint",
+        action="append",
+        metavar="ID",
+        help="compare hypothetical eligibility without this constraint; repeat for multiple ids",
+    )
     args = parser.parse_args(argv)
     try:
-        report = eliminate(load_decision(args.input))
+        data = load_decision(args.input)
+        report = (
+            counterfactual(data, args.omit_constraint)
+            if args.omit_constraint is not None
+            else eliminate(data)
+        )
         rendered = (
             json.dumps(report, indent=2, ensure_ascii=False) + "\n"
             if args.format == "json"

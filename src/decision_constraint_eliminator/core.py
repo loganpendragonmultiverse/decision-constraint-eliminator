@@ -30,6 +30,7 @@ def load_decision(path: Path) -> dict[str, Any]:
         if option["id"] in seen:
             raise ValueError(f"duplicate option id: {option['id']}")
         seen.add(option["id"])
+    constraint_ids: set[str] = set()
     for constraint in constraints:
         if (
             not isinstance(constraint, dict)
@@ -38,6 +39,9 @@ def load_decision(path: Path) -> dict[str, Any]:
             or constraint.get("operator") not in OPERATORS
         ):
             raise ValueError("each constraint requires id, field, and a supported operator")
+        if not constraint["id"] or constraint["id"] in constraint_ids:
+            raise ValueError("constraint ids must be non-empty and unique")
+        constraint_ids.add(constraint["id"])
         if constraint["operator"] != "exists" and "value" not in constraint:
             raise ValueError(f"constraint {constraint['id']} requires a value")
     return data
@@ -142,6 +146,39 @@ def eliminate(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def counterfactual(data: dict[str, Any], omitted: list[str]) -> dict[str, Any]:
+    """Retain the full result and compare explicit hypothetical omissions."""
+    ids = [constraint["id"] for constraint in data["constraints"]]
+    if any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
+        raise ValueError("constraint ids must be non-empty and unique")
+    if (
+        not isinstance(omitted, list)
+        or not omitted
+        or any(not isinstance(value, str) or value not in ids for value in omitted)
+        or len(set(omitted)) != len(omitted)
+    ):
+        raise ValueError("omitted constraints must be known, unique ids in a non-empty list")
+    original = eliminate(data)
+    relaxed = eliminate(
+        {**data, "constraints": [c for c in data["constraints"] if c["id"] not in omitted]}
+    )
+    original["counterfactual"] = {
+        "hypothetical": True,
+        "omitted_constraints": omitted.copy(),
+        "relaxed": relaxed,
+        "eligibility_changes": [
+            {
+                "id": before["id"],
+                "original": before["classification"],
+                "hypothetical": after["classification"],
+            }
+            for before, after in zip(original["matrix"], relaxed["matrix"])
+            if before["classification"] != after["classification"]
+        ],
+    }
+    return original
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Decision Constraint Report",
@@ -167,5 +204,26 @@ def render_markdown(report: dict[str, Any]) -> str:
         states = ", ".join(f"{check['constraint']}={check['state']}" for check in item["checks"])
         lines.append(
             f"- **{item['label']}**: {item['classification']} — {states or 'no constraints'}"
+        )
+    if "counterfactual" in report:
+        scenario = report["counterfactual"]
+        lines.extend(
+            [
+                "",
+                "## Hypothetical constraint omission",
+                "",
+                "Omitted: " + ", ".join(scenario["omitted_constraints"]),
+                "",
+                "All eligibility below is hypothetical; options remain unranked.",
+                "",
+            ]
+        )
+        relaxed_text = render_markdown(scenario["relaxed"])
+        lines.append(
+            relaxed_text.replace("# Decision Constraint Report", "### Hypothetical result")
+            .replace("## Surviving", "### Hypothetical survivors")
+            .replace("## Eliminated", "### Hypothetically eliminated")
+            .replace("## Unknown", "### Hypothetically unknown")
+            .replace("## Complete Matrix", "### Hypothetical matrix")
         )
     return "\n".join(lines).rstrip() + "\n"
