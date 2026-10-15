@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0 - 2026-10-15
+
+- Compare explicit hypothetical constraint omissions while retaining the original complete matrix and missing-field policy.
+- Report only affected eligibility transitions without ranking options. Reject unknown or repeated omission IDs and ambiguous constraint IDs.
+
 ## 1.1.0 - 2026-07-27
 
 - Added a complete option-versus-constraint matrix with pass, fail, ignored, and unknown states.
