@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "decision-constraint-eliminator"
-version = "1.2.0"
+version = "1.2.1"
 description = "Remove decision options that violate explicit hard requirements before comparing preferences."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,3 +31,7 @@ omit = ["src/*/__main__.py"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=decision_constraint_eliminator --cov-branch --cov-report=term-missing --cov-fail-under=90"
+
+[tool.setuptools.data-files]
+"share/doc/decision-constraint-eliminator" = ["README.md", "DEVELOPMENT.md", "TESTING.md", "CHANGELOG.md", "LICENSE", "CONTRIBUTING.md", "SECURITY.md"]
+"share/doc/decision-constraint-eliminator/examples" = ["examples/decision.json"]
