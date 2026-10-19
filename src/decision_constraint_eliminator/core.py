@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import html
 import json
+import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +11,14 @@ OPERATORS = {"eq", "ne", "in", "not_in", "min", "max", "contains", "exists"}
 
 
 def load_decision(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    return _validate_decision(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _validate_decision(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict) or data.get("version") != 1:
         raise ValueError("decision must be a version 1 object")
     options, constraints = data.get("options"), data.get("constraints")
-    if data.get("missing_policy", "fail") not in {"fail", "ignore", "unknown"}:
+    if data.get("missing_policy", "fail") not in ("fail", "ignore", "unknown"):
         raise ValueError("missing_policy must be fail, ignore, or unknown")
     if not isinstance(options, list) or not options:
         raise TypeError("options must be a non-empty list")
@@ -36,7 +42,8 @@ def load_decision(path: Path) -> dict[str, Any]:
             not isinstance(constraint, dict)
             or not isinstance(constraint.get("id"), str)
             or not isinstance(constraint.get("field"), str)
-            or constraint.get("operator") not in OPERATORS
+            or not isinstance(constraint.get("operator"), str)
+            or constraint["operator"] not in OPERATORS
         ):
             raise ValueError("each constraint requires id, field, and a supported operator")
         if not constraint["id"] or constraint["id"] in constraint_ids:
@@ -44,7 +51,22 @@ def load_decision(path: Path) -> dict[str, Any]:
         constraint_ids.add(constraint["id"])
         if constraint["operator"] != "exists" and "value" not in constraint:
             raise ValueError(f"constraint {constraint['id']} requires a value")
+        operator, value = constraint["operator"], constraint.get("value")
+        if operator in {"in", "not_in"} and not isinstance(value, list):
+            raise TypeError(f"constraint {constraint['id']} {operator} value must be a list")
+        if operator in {"min", "max"} and not _finite_number(value):
+            raise TypeError(f"constraint {constraint['id']} requires finite numeric values")
+        if operator == "exists" and "value" in constraint and not isinstance(value, bool):
+            raise TypeError(f"constraint {constraint['id']} exists value must be a boolean")
     return data
+
+
+def _finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and (not isinstance(value, float) or math.isfinite(value))
+    )
 
 
 def _passes(attributes: dict[str, Any], constraint: dict[str, Any]) -> bool:
@@ -69,13 +91,8 @@ def _passes(attributes: dict[str, Any], constraint: dict[str, Any]) -> bool:
             raise TypeError(f"constraint {constraint['id']} not_in value must be a list")
         return actual not in expected
     if operator in {"min", "max"}:
-        if (
-            not isinstance(actual, (int, float))
-            or isinstance(actual, bool)
-            or not isinstance(expected, (int, float))
-            or isinstance(expected, bool)
-        ):
-            raise TypeError(f"constraint {constraint['id']} requires numeric values")
+        if not _finite_number(actual) or not _finite_number(expected):
+            raise TypeError(f"constraint {constraint['id']} requires finite numeric values")
         return actual >= expected if operator == "min" else actual <= expected
     if operator == "contains":
         if not isinstance(actual, (str, list)):
@@ -87,9 +104,8 @@ def _passes(attributes: dict[str, Any], constraint: dict[str, Any]) -> bool:
 
 
 def eliminate(data: dict[str, Any]) -> dict[str, Any]:
+    data = _validate_decision(data)
     policy = data.get("missing_policy", "fail")
-    if policy not in {"fail", "ignore", "unknown"}:
-        raise ValueError("missing_policy must be fail, ignore, or unknown")
     surviving, eliminated, unknown, matrix = [], [], [], []
     for option in data["options"]:
         failures, unresolved, checks = [], [], []
@@ -148,9 +164,8 @@ def eliminate(data: dict[str, Any]) -> dict[str, Any]:
 
 def counterfactual(data: dict[str, Any], omitted: list[str]) -> dict[str, Any]:
     """Retain the full result and compare explicit hypothetical omissions."""
+    data = _validate_decision(data)
     ids = [constraint["id"] for constraint in data["constraints"]]
-    if any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
-        raise ValueError("constraint ids must be non-empty and unique")
     if (
         not isinstance(omitted, list)
         or not omitted
@@ -179,6 +194,12 @@ def counterfactual(data: dict[str, Any], omitted: list[str]) -> dict[str, Any]:
     return original
 
 
+def _literal(value: Any) -> str:
+    text = html.escape(str(value), quote=False)
+    text = re.sub(r"([\\*_{}\[\]()#+!|~\-])", r"\\\1", text)
+    return text.replace("\r", "&#13;").replace("\n", "&#10;").replace("`", "&#96;")
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Decision Constraint Report",
@@ -188,22 +209,28 @@ def render_markdown(report: dict[str, Any]) -> str:
         "## Surviving",
         "",
     ]
-    lines.extend(f"- **{item['label']}** (`{item['id']}`)" for item in report["surviving"])
+    lines.extend(
+        f"- **{_literal(item['label'])}** ({_literal(item['id'])})" for item in report["surviving"]
+    )
     if report["eliminated"]:
         lines.extend(["", "## Eliminated", ""])
         for item in report["eliminated"]:
-            lines.append(f"- **{item['label']}** (`{item['id']}`)")
-            lines.extend(f"  - {failure['label']}" for failure in item["failures"])
+            lines.append(f"- **{_literal(item['label'])}** ({_literal(item['id'])})")
+            lines.extend(f"  - {_literal(failure['label'])}" for failure in item["failures"])
     if report["unknown"]:
         lines.extend(["", "## Unknown", ""])
         for item in report["unknown"]:
-            lines.append(f"- **{item['label']}** (`{item['id']}`)")
-            lines.extend(f"  - {check['label']} (missing field)" for check in item["unknown"])
+            lines.append(f"- **{_literal(item['label'])}** ({_literal(item['id'])})")
+            lines.extend(
+                f"  - {_literal(check['label'])} (missing field)" for check in item["unknown"]
+            )
     lines.extend(["", "## Complete Matrix", ""])
     for item in report["matrix"]:
-        states = ", ".join(f"{check['constraint']}={check['state']}" for check in item["checks"])
+        states = ", ".join(
+            f"{_literal(check['constraint'])}={check['state']}" for check in item["checks"]
+        )
         lines.append(
-            f"- **{item['label']}**: {item['classification']} — {states or 'no constraints'}"
+            f"- **{_literal(item['label'])}**: {item['classification']} — {states or 'no constraints'}"
         )
     if "counterfactual" in report:
         scenario = report["counterfactual"]
@@ -212,7 +239,8 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "",
                 "## Hypothetical constraint omission",
                 "",
-                "Omitted: " + ", ".join(scenario["omitted_constraints"]),
+                "Omitted: "
+                + ", ".join(_literal(value) for value in scenario["omitted_constraints"]),
                 "",
                 "All eligibility below is hypothetical; options remain unranked.",
                 "",

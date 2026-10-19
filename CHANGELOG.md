@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1 - 2026-10-19
+
+- Validate configured requirement shapes before missing-field or hypothetical omission shortcuts. Keep all operator, matrix and missing-policy semantics for valid inputs.
+- Keep authored labels and IDs literal in Markdown without changing JSON evidence.
+- Create reports exclusively, refuse symlink destinations and handle closed output pipes with a clean error.
+- Include handoff documents, license and the supplied example in both release package formats.
+
 ## 1.2.0 - 2026-10-15
 
 - Compare explicit hypothetical constraint omissions while retaining the original complete matrix and missing-field policy.
